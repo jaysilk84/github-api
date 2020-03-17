@@ -350,4 +350,5 @@ MigrationBackup/
 .ionide/
 
 # Specific ignores for this project
-secrets.json 
+secrets.json
+*.csv
