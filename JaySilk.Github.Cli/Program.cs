@@ -25,7 +25,7 @@ namespace JaySilk.Github.Cli
     {
         private static readonly HttpClient client = new HttpClient();
         private static IConfiguration config = new ConfigurationBuilder()
-            .AddJsonFile("secrets.json", false, true)
+            .AddJsonFile("secrets.json", true, true)
             .Build();
 
         private static void WriteRepositoriesToFile(List<Repository> repos)
@@ -39,27 +39,48 @@ namespace JaySilk.Github.Cli
             }
         }
 
-        private static async Task<GithubResponse> ProcessRepositories(string requestUri)
+        private static async Task<GithubResponse> ProcessRepositories(string requestUri, string oAuthToken)
         {
             client.DefaultRequestHeaders.Accept.Clear();
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", config["oAuthKey"]);
-            client.DefaultRequestHeaders.Add("User-Agent", "XpoLogistics Repo Lister");
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", oAuthToken);
+            client.DefaultRequestHeaders.Add("User-Agent", "Github Repo Lister");
 
-            //var stringTask = client.GetStringAsync("https://api.github.com/orgs/xpologistics/repos?type=private");
             var response = await client.GetAsync(requestUri);
-            return new GithubResponse(await JsonSerializer.DeserializeAsync<List<Repository>>(await response.Content.ReadAsStreamAsync()),
-                LinkHeader.LinksFromHeader(response.Headers.GetValues("Link").FirstOrDefault()));
+            
+            response.EnsureSuccessStatusCode();
+
+            var serializedRepos = await JsonSerializer.DeserializeAsync<List<Repository>>(await response.Content.ReadAsStreamAsync());
+
+            if (response.Headers.Contains("Link"))
+                return new GithubResponse(serializedRepos, LinkHeader.LinksFromHeader(response.Headers.GetValues("Link").FirstOrDefault()));
+            else
+                return new GithubResponse(serializedRepos, new LinkHeader());
+                    
         }
 
         static async Task Main(string[] args)
         {
+            if (args.Length == 0 || (args.Length == 1 && config["oAuthKey"] == null)) {
+                Console.WriteLine($"Usage: {System.Diagnostics.Process.GetCurrentProcess().ProcessName} <organization> [oAuth key]");
+
+                if (args.Length == 1 && config["oAuthKey"] == null)
+                    Console.WriteLine("No oAuth key specified and no secrets.json file with oAuthKey defined");
+                return;
+            }
+
+            string org = args[0];
+            string oAuthToken = args.Length > 1 ? args[1] : config["oAuthKey"];
+
             var repos = new List<Repository>();
             int p = 1;
-            string url = "https://api.github.com/orgs/xpologistics/repos?type=private&per_page=100";
+            string url = $"https://api.github.com/orgs/{org}/repos?type=private&per_page=100";
+
+            Console.WriteLine($"Processing repositories for {org} ({url})");
+
             do {
                 Console.WriteLine($"Processing page {p}");
-                var result = await ProcessRepositories(url);
+                var result = await ProcessRepositories(url, oAuthToken);
                 repos.AddRange(result.Repositories);
                 url = result.LinkHeader.NextLink;
                 p++;
@@ -68,7 +89,6 @@ namespace JaySilk.Github.Cli
             Console.WriteLine($"Found {repos.Count} repositories");
 
             WriteRepositoriesToFile(repos);
-    
         }
 
         private class GithubResponse
@@ -102,6 +122,8 @@ namespace JaySilk.Github.Cli
             public DateTime UpdatedDate { get; set; }
         }
 
+
+        // From a gist I found online (https://gist.github.com/pimbrouwers/8f78e318ccfefff18f518a483997be29)
         public class LinkHeader
         {
             public string FirstLink { get; set; }
